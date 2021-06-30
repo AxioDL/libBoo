@@ -3,6 +3,7 @@
 #include <array>
 #include <cmath>
 #include <vector>
+#include <optional>
 
 #include <glslang/Public/ShaderLang.h>
 #include <StandAlone/ResourceLimits.h>
@@ -82,6 +83,8 @@ class VulkanDataFactoryImpl final : public VulkanDataFactory, public GraphicsDat
   VulkanDescriptorPool* m_descPoolHead = nullptr;
 
   PipelineCompileQueue<class VulkanShaderPipeline> m_pipelineQueue;
+  std::optional<Context> m_lazyContext;
+  void flushContext(Context&);
 
   float m_gamma = 1.f;
   ObjToken<IShaderPipeline> m_gammaShader;
@@ -126,21 +129,22 @@ public:
   VulkanDataFactoryImpl(IGraphicsContext* parent, VulkanContext* ctx);
   ~VulkanDataFactoryImpl() { assert(m_descPoolHead == nullptr && "Dangling descriptor pools detected"); }
 
-  Platform platform() const { return Platform::Vulkan; }
-  const SystemChar* platformName() const { return _SYS_STR("Vulkan"); }
+  Platform platform() const override { return Platform::Vulkan; }
+  const SystemChar* platformName() const override { return _SYS_STR("Vulkan"); }
 
   boo::ObjToken<VulkanDescriptorPool> allocateDescriptorSets(VkDescriptorSet* out);
 
-  void commitTransaction(const FactoryCommitFunc& __BooTraceArgs);
+  void commitTransaction(const FactoryCommitFunc& __BooTraceArgs) override;
+  void lazyCommitTransaction(const FactoryCommitFunc& __BooTraceArgs) override;
 
-  boo::ObjToken<IGraphicsBufferD> newPoolBuffer(BufferUse use, size_t stride, size_t count __BooTraceArgs);
+  boo::ObjToken<IGraphicsBufferD> newPoolBuffer(BufferUse use, size_t stride, size_t count __BooTraceArgs) override;
 
-  void setDisplayGamma(float gamma) {
+  void setDisplayGamma(float gamma) override {
     m_gamma = gamma;
     UpdateGammaLUT(m_gammaLUT.get(), gamma);
   }
 
-  bool isTessellationSupported(uint32_t& maxPatchSizeOut) {
+  bool isTessellationSupported(uint32_t& maxPatchSizeOut) override {
     maxPatchSizeOut = 0;
     if (!m_ctx->m_features.tessellationShader)
       return false;
@@ -148,11 +152,11 @@ public:
     return true;
   }
 
-  void waitUntilShadersReady() {
+  void waitUntilShadersReady() override {
     m_pipelineQueue.waitUntilReady();
   }
 
-  bool areShadersReady() {
+  bool areShadersReady() override {
     return m_pipelineQueue.isReady();
   }
 };
@@ -3791,10 +3795,28 @@ boo::ObjToken<IShaderDataBinding> VulkanDataFactory::Context::newShaderDataBindi
 
 void VulkanDataFactoryImpl::commitTransaction(
     const std::function<bool(IGraphicsDataFactory::Context&)>& trans __BooTraceArgs) {
-  Context ctx(*this __BooTraceArgsUse);
-  if (!trans(ctx))
-    return;
 
+  Context ctx(*this __BooTraceArgsUse);
+  if (!trans(ctx)) {
+    return;
+  }
+  if (m_lazyContext) {
+    flushContext(*m_lazyContext);
+    m_lazyContext.reset();
+  }
+  flushContext(ctx);
+}
+
+void VulkanDataFactoryImpl::lazyCommitTransaction(
+    const std::function<bool(IGraphicsDataFactory::Context&)>& trans __BooTraceArgs) {
+
+  if (!m_lazyContext) {
+    m_lazyContext.emplace(*this __BooTraceArgsUse);
+  }
+  trans(*m_lazyContext);
+}
+
+void VulkanDataFactoryImpl::flushContext(Context& ctx) {
   VulkanData* data = ctx.m_data.cast<VulkanData>();
 
   /* Start asynchronous shader compiles */

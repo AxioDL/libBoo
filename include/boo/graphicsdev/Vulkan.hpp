@@ -130,10 +130,10 @@ public:
     friend class VulkanDataFactoryImpl;
     VulkanDataFactory& m_parent;
     boo::ObjToken<BaseGraphicsData> m_data;
-    Context(VulkanDataFactory& parent __BooTraceArgs);
-    ~Context();
 
   public:
+    Context(VulkanDataFactory& parent __BooTraceArgs);
+    ~Context();
     Platform platform() const { return Platform::Vulkan; }
     const SystemChar* platformName() const { return _SYS_STR("Vulkan"); }
 
